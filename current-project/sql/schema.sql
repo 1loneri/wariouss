@@ -1,22 +1,10 @@
-CREATE TABLE IF NOT EXISTS users (
-  id BIGSERIAL PRIMARY KEY,
-  twitch_id TEXT UNIQUE NOT NULL,
-  login TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  avatar_url TEXT,
-  points BIGINT NOT NULL DEFAULT 0 CHECK (points >= 0),
-  vp BIGINT NOT NULL DEFAULT 0 CHECK (vp >= 0),
-  watch_seconds BIGINT NOT NULL DEFAULT 0 CHECK (watch_seconds >= 0),
-  redeemed_count INTEGER NOT NULL DEFAULT 0 CHECK (redeemed_count >= 0),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY,twitch_id TEXT UNIQUE NOT NULL,login TEXT NOT NULL,display_name TEXT NOT NULL,avatar_url TEXT,points BIGINT NOT NULL DEFAULT 0 CHECK (points >= 0),vp BIGINT NOT NULL DEFAULT 0 CHECK (vp >= 0),watch_seconds BIGINT NOT NULL DEFAULT 0 CHECK (watch_seconds >= 0),redeemed_count INTEGER NOT NULL DEFAULT 0 CHECK (redeemed_count >= 0),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS rewards (id SERIAL PRIMARY KEY,vp INTEGER NOT NULL CHECK (vp > 0),cost BIGINT NOT NULL CHECK (cost > 0),active BOOLEAN NOT NULL DEFAULT TRUE,sort_order INTEGER NOT NULL DEFAULT 0,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
-CREATE TABLE IF NOT EXISTS transactions (id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,type TEXT NOT NULL CHECK (type IN ('watch','redeem','admin_adjustment')),points_delta BIGINT NOT NULL DEFAULT 0,vp_delta BIGINT NOT NULL DEFAULT 0,reward_id INTEGER REFERENCES rewards(id),metadata JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS transactions (id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,type TEXT NOT NULL CHECK (type IN ('watch','redeem','admin_adjustment','admin_vp_reset')),points_delta BIGINT NOT NULL DEFAULT 0,vp_delta BIGINT NOT NULL DEFAULT 0,reward_id INTEGER REFERENCES rewards(id),metadata JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS watch_sessions (id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),ended_at TIMESTAMPTZ,credited_seconds BIGINT NOT NULL DEFAULT 0,active BOOLEAN NOT NULL DEFAULT TRUE);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON transactions(user_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_watch_sessions_user_active ON watch_sessions(user_id,active);
-INSERT INTO rewards (vp,cost,sort_order) SELECT 100,10000,1 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=100 AND cost=10000);
-INSERT INTO rewards (vp,cost,sort_order) SELECT 550,50000,2 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=550 AND cost=50000);
-INSERT INTO rewards (vp,cost,sort_order) SELECT 1200,100000,3 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=1200 AND cost=100000);
-INSERT INTO rewards (vp,cost,sort_order) SELECT 2500,200000,4 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=2500 AND cost=200000);
+INSERT INTO rewards(vp,cost,sort_order) SELECT 100,10000,1 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=100 AND cost=10000);
+INSERT INTO rewards(vp,cost,sort_order) SELECT 550,50000,2 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=550 AND cost=50000);
+INSERT INTO rewards(vp,cost,sort_order) SELECT 1200,100000,3 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=1200 AND cost=100000);
+INSERT INTO rewards(vp,cost,sort_order) SELECT 2500,200000,4 WHERE NOT EXISTS (SELECT 1 FROM rewards WHERE vp=2500 AND cost=200000);
