@@ -44,7 +44,8 @@ app.get('/auth/twitch/callback',async(req,res)=>{try{if(!req.query.code||!req.qu
 app.post('/auth/logout',async(req,res)=>{req.session.destroy(()=>res.json({ok:true}));});
 app.get('/api/me',requireAuth,async(req,res)=>{const {rows}=await pool.query('SELECT * FROM users WHERE id=$1',[req.session.user.id]);if(!rows[0])return req.session.destroy(()=>res.status(401).json({error:'Пользователь не найден'}));res.json({user:publicUser(rows[0])});});
 app.get('/api/live',async(req,res)=>{try{const s=await getLive();res.json({live:!!s,stream:s?{title:s.title,game:s.game_name,viewers:s.viewer_count,started_at:s.started_at}:null});}catch(e){res.status(502).json({error:e.message});}});
-app.get('/api/rewards',async(req,res)=>{const {rows}=await pool.query('SELECT * FROM rewards WHERE active=true ORDER BY sort_order,id');res.json({rewards:rows.map(r=>({id:r.id,vp:r.vp,cost:Number(r.cost)}))});});
+// Only the four canonical VP rewards can ever be shown in the public shop.
+app.get('/api/rewards',async(req,res)=>{const {rows}=await pool.query("SELECT * FROM rewards WHERE active=true AND ((vp=100 AND cost=10000) OR (vp=550 AND cost=50000) OR (vp=1200 AND cost=100000) OR (vp=2500 AND cost=200000)) ORDER BY sort_order,id");res.json({rewards:rows.map(r=>({id:r.id,vp:r.vp,cost:Number(r.cost)}))});});
 app.get('/api/leaderboard',async(req,res)=>{const {rows}=await pool.query('SELECT id,display_name,points,avatar_url,custom_avatar_url FROM users ORDER BY points DESC,id ASC LIMIT 10');res.json({users:rows.map(r=>({id:r.id,display_name:r.display_name,avatar_url:r.custom_avatar_url||r.avatar_url||'',points:Number(r.points)}))});});
 app.post('/api/profile/avatar',requireAuth,async(req,res)=>{const avatar=typeof req.body.avatar==='string'?req.body.avatar:'';if(!avatar)return res.status(400).json({error:'Аватар не выбран'});if(!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar))return res.status(400).json({error:'Неверный формат аватара'});if(avatar.length>250000)return res.status(413).json({error:'Картинка слишком большая'});const {rows}=await pool.query('UPDATE users SET custom_avatar_url=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[avatar,req.session.user.id]);if(!rows[0])return res.status(404).json({error:'Пользователь не найден'});res.json({user:publicUser(rows[0])});});
 app.delete('/api/profile/avatar',requireAuth,async(req,res)=>{const {rows}=await pool.query('UPDATE users SET custom_avatar_url=NULL,updated_at=NOW() WHERE id=$1 RETURNING *',[req.session.user.id]);if(!rows[0])return res.status(404).json({error:'Пользователь не найден'});res.json({user:publicUser(rows[0])});});
@@ -57,10 +58,33 @@ app.post('/api/redeem/quick',requireAuth,async(req,res)=>{const {rows}=await poo
 app.get('/admin',requireAdmin,(req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
 app.get('/api/admin/stats',requireAdmin,async(req,res)=>{const[users,points,vp,tx]=await Promise.all([pool.query('SELECT COUNT(*)::int count FROM users'),pool.query('SELECT COALESCE(SUM(points),0)::bigint sum FROM users'),pool.query('SELECT COALESCE(SUM(vp),0)::bigint sum FROM users'),pool.query('SELECT COUNT(*)::int count FROM transactions')]);res.json({users:Number(users.rows[0].count),points:Number(points.rows[0].sum),vp:Number(vp.rows[0].sum),transactions:Number(tx.rows[0].count)});});
 app.get('/api/admin/users',requireAdmin,async(req,res)=>{const {rows}=await pool.query('SELECT id,twitch_id,login,display_name,points,vp,watch_seconds,redeemed_count FROM users ORDER BY points DESC LIMIT 100');res.json({users:rows.map(publicUser)});});
-app.post('/api/admin/users/:id/vp/reset',requireAdmin,async(req,res)=>{const client=await pool.connect();try{await client.query('BEGIN');const u=await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE',[req.params.id]);if(!u.rows[0])throw new Error('Пользователь не найден');const oldVp=Number(u.rows[0].vp);await client.query('UPDATE users SET vp=0,updated_at=NOW() WHERE id=$1',[req.params.id]);if(oldVp!==0)await client.query('INSERT INTO transactions(user_id,type,vp_delta,metadata) VALUES($1,\'admin_vp_reset\',$2,$3)',[req.params.id,-oldVp,JSON.stringify({admin:req.session.user.twitchId,previous_vp:oldVp})]);await client.query('COMMIT');res.json({ok:true,previous_vp:oldVp});}catch(e){await client.query('ROLLBACK');res.status(409).json({error:e.message});}finally{client.release();}});
+app.post('/api/admin/users/:id/vp/reset',requireAdmin,async(req,res)=>{const client=await pool.connect();try{await client.query('BEGIN');const u=await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE',[req.params.id]);if(!u.rows[0])throw new Error('Пользователь не найден');const oldVp=Number(u.rows[0].vp);await client.query('UPDATE users SET vp=0,updated_at=NOW() WHERE id=$1',[req.params.id]);if(oldVp!==0){await client.query('INSERT INTO transactions(user_id,type,vp_delta,metadata) VALUES($1,\'admin_vp_reset\',$2,$3)',[req.params.id,-oldVp,JSON.stringify({admin:req.session.user.twitchId,previous_vp:oldVp})]);}await client.query('COMMIT');res.json({ok:true,previous_vp:oldVp});}catch(e){await client.query('ROLLBACK');res.status(409).json({error:e.message});}finally{client.release();}});
 app.post('/api/admin/users/:id/points',requireAdmin,async(req,res)=>{const delta=Number(req.body.delta);if(!Number.isInteger(delta)||Math.abs(delta)>100000000)return res.status(400).json({error:'Неверное значение'});const client=await pool.connect();try{await client.query('BEGIN');const u=await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE',[req.params.id]);if(!u.rows[0])throw new Error('Пользователь не найден');if(Number(u.rows[0].points)+delta<0)throw new Error('Баланс не может быть отрицательным');await client.query('UPDATE users SET points=points+$1,updated_at=NOW() WHERE id=$2',[delta,req.params.id]);await client.query('INSERT INTO transactions(user_id,type,points_delta,metadata) VALUES($1,\'admin_adjustment\',$2,$3)',[req.params.id,delta,JSON.stringify({admin:req.session.user.twitchId})]);await client.query('COMMIT');res.json({ok:true});}catch(e){await client.query('ROLLBACK');res.status(409).json({error:e.message});}finally{client.release();}});
 app.get('/api/admin/transactions',requireAdmin,async(req,res)=>{const {rows}=await pool.query(`SELECT t.id,t.type,t.points_delta,t.vp_delta,t.created_at,u.display_name FROM transactions t JOIN users u ON u.id=t.user_id ORDER BY t.created_at DESC LIMIT 100`);res.json({transactions:rows});});
 app.post('/api/admin/rewards',requireAdmin,async(req,res)=>{const id=Number(req.body.id),cost=Number(req.body.cost),vp=Number(req.body.vp);if(!Number.isInteger(id)||cost<=0||vp<=0)return res.status(400).json({error:'Неверные данные'});await pool.query('UPDATE rewards SET cost=$1,vp=$2 WHERE id=$3',[cost,vp,id]);res.json({ok:true});});
 app.use(express.static(path.join(__dirname,'public')));
-async function boot(){if(!process.env.DATABASE_URL)console.warn('DATABASE_URL is not set.');if(fs.existsSync(path.join(__dirname,'sql','schema.sql'))){const sql=fs.readFileSync(path.join(__dirname,'sql','schema.sql'),'utf8');await pool.query(sql);}await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_avatar_url TEXT');app.listen(PORT,()=>console.log(`wariouss.vp running on http://localhost:${PORT}`));}
+
+async function normalizeRewards(){
+  const canonical=[[100,10000,1],[550,50000,2],[1200,100000,3],[2500,200000,4]];
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    await client.query('UPDATE rewards SET active=false');
+    for(const [vp,cost,sortOrder] of canonical){
+      const existing=await client.query('SELECT id FROM rewards WHERE vp=$1 AND cost=$2 ORDER BY id ASC LIMIT 1',[vp,cost]);
+      let id;
+      if(existing.rows[0]) id=existing.rows[0].id;
+      else {const inserted=await client.query('INSERT INTO rewards(vp,cost,sort_order,active) VALUES($1,$2,$3,true) RETURNING id',[vp,cost,sortOrder]);id=inserted.rows[0].id;}
+      await client.query('UPDATE rewards SET active=true,sort_order=$1 WHERE id=$2',[sortOrder,id]);
+    }
+    await client.query('COMMIT');
+  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+}
+async function boot(){
+  if(!process.env.DATABASE_URL)console.warn('DATABASE_URL is not set.');
+  if(fs.existsSync(path.join(__dirname,'sql','schema.sql'))){const sql=fs.readFileSync(path.join(__dirname,'sql','schema.sql'),'utf8');await pool.query(sql);}
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_avatar_url TEXT');
+  await normalizeRewards();
+  app.listen(PORT,()=>console.log(`wariouss.vp running on http://localhost:${PORT}`));
+}
 boot().catch(err=>{console.error(err);process.exit(1)});
